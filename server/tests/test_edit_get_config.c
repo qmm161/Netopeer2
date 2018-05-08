@@ -72,68 +72,40 @@ __wrap_sr_list_schemas(sr_session_ctx_t *session, sr_schema_t **schemas, size_t 
 {
     (void)session;
 
-    *schema_cnt = 3;
+    *schema_cnt = 4;
 
-    *schemas = calloc(3, sizeof **schemas);
-    (*schemas)[0].module_name = strdup("ietf-interfaces");
-    (*schemas)[0].ns = strdup("urn:ietf:params:xml:ns:yang:ietf-interfaces");
-    (*schemas)[0].prefix = strdup("if");
-    (*schemas)[0].revision.revision = strdup("2014-05-08");
-    (*schemas)[0].revision.file_path_yin = strdup(TESTS_DIR"/files/ietf-interfaces.yin");
-    (*schemas)[0].enabled_features = malloc(sizeof(char *));
-    (*schemas)[0].enabled_features[0] = strdup("if-mib");
-    (*schemas)[0].enabled_feature_cnt = 1;
+    *schemas = calloc(4, sizeof **schemas);
 
-    (*schemas)[1].module_name = strdup("ietf-ip");
-    (*schemas)[1].ns = strdup("urn:ietf:params:xml:ns:yang:ietf-ip");
-    (*schemas)[1].prefix = strdup("ip");
-    (*schemas)[1].revision.revision = strdup("2014-06-16");
-    (*schemas)[1].revision.file_path_yin = strdup(TESTS_DIR"/files/ietf-ip.yin");
-    (*schemas)[1].enabled_features = malloc(2 * sizeof(char *));
-    (*schemas)[1].enabled_features[0] = strdup("ipv4-non-contiguous-netmasks");
-    (*schemas)[1].enabled_features[1] = strdup("ipv6-privacy-autoconf");
-    (*schemas)[1].enabled_feature_cnt = 2;
+    (*schemas)[0].module_name = strdup("ietf-netconf-server");
+    (*schemas)[0].installed = 1;
 
-    (*schemas)[2].module_name = strdup("iana-if-type");
-    (*schemas)[2].ns = strdup("urn:ietf:params:xml:ns:yang:iana-if-type");
-    (*schemas)[2].prefix = strdup("if");
-    (*schemas)[2].revision.revision = strdup("2014-05-08");
-    (*schemas)[2].revision.file_path_yin = strdup(TESTS_DIR"/files/iana-if-type.yin");
+    (*schemas)[1].module_name = strdup("ietf-interfaces");
+    (*schemas)[1].ns = strdup("urn:ietf:params:xml:ns:yang:ietf-interfaces");
+    (*schemas)[1].prefix = strdup("if");
+    (*schemas)[1].revision.revision = strdup("2014-05-08");
+    (*schemas)[1].revision.file_path_yin = strdup(TESTS_DIR"/files/ietf-interfaces.yin");
+    (*schemas)[1].enabled_features = malloc(sizeof(char *));
+    (*schemas)[1].enabled_features[0] = strdup("if-mib");
+    (*schemas)[1].enabled_feature_cnt = 1;
+    (*schemas)[1].installed = 1;
 
-    return SR_ERR_OK;
-}
+    (*schemas)[2].module_name = strdup("ietf-ip");
+    (*schemas)[2].ns = strdup("urn:ietf:params:xml:ns:yang:ietf-ip");
+    (*schemas)[2].prefix = strdup("ip");
+    (*schemas)[2].revision.revision = strdup("2014-06-16");
+    (*schemas)[2].revision.file_path_yin = strdup(TESTS_DIR"/files/ietf-ip.yin");
+    (*schemas)[2].enabled_features = malloc(2 * sizeof(char *));
+    (*schemas)[2].enabled_features[0] = strdup("ipv4-non-contiguous-netmasks");
+    (*schemas)[2].enabled_features[1] = strdup("ipv6-privacy-autoconf");
+    (*schemas)[2].enabled_feature_cnt = 2;
+    (*schemas)[2].installed = 1;
 
-int
-__wrap_sr_get_schema(sr_session_ctx_t *session, const char *module_name, const char *revision,
-                     const char *submodule_name, sr_schema_format_t format, char **schema_content)
-{
-    int fd;
-    struct stat st;
-    (void)session;
-    (void)revision;
-    (void)submodule_name;
-
-    if (format != SR_SCHEMA_YIN) {
-        fail();
-    }
-
-    if (!strcmp(module_name, "iana-if-type")) {
-        fd = open(TESTS_DIR "/files/iana-if-type.yin", O_RDONLY);
-    } else if (!strcmp(module_name, "ietf-interfaces")) {
-        fd = open(TESTS_DIR "/files/ietf-interfaces.yin", O_RDONLY);
-    } else if (!strcmp(module_name, "ietf-ip")) {
-        fd = open(TESTS_DIR "/files/ietf-ip.yin", O_RDONLY);
-    } else {
-        return SR_ERR_NOT_FOUND;
-    }
-    assert_int_not_equal(fd, -1);
-
-    assert_int_equal(fstat(fd, &st), 0);
-
-    *schema_content = malloc((st.st_size + 1) * sizeof(char));
-    assert_int_equal(read(fd, *schema_content, st.st_size), st.st_size);
-    close(fd);
-    (*schema_content)[st.st_size] = '\0';
+    (*schemas)[3].module_name = strdup("iana-if-type");
+    (*schemas)[3].ns = strdup("urn:ietf:params:xml:ns:yang:iana-if-type");
+    (*schemas)[3].prefix = strdup("if");
+    (*schemas)[3].revision.revision = strdup("2014-05-08");
+    (*schemas)[3].revision.file_path_yin = strdup(TESTS_DIR"/files/iana-if-type.yin");
+    (*schemas)[3].installed = 1;
 
     return SR_ERR_OK;
 }
@@ -171,22 +143,41 @@ __wrap_sr_session_refresh(sr_session_ctx_t *session)
 }
 
 int
-__wrap_sr_get_items(sr_session_ctx_t *session, const char *xpath, sr_val_t **values, size_t *value_cnt)
+__wrap_sr_module_install_subscribe(sr_session_ctx_t *session, sr_module_install_cb callback, void *private_ctx,
+                                   sr_subscr_options_t opts, sr_subscription_ctx_t **subscription)
 {
     (void)session;
+    (void)callback;
+    (void)private_ctx;
+    (void)opts;
+    (void)subscription;
+    return SR_ERR_OK;
+}
 
-    if (!strcmp(xpath, "/ietf-interfaces:*")) {
-        *values = calloc(1, sizeof **values);
+int
+__wrap_sr_feature_enable_subscribe(sr_session_ctx_t *session, sr_feature_enable_cb callback, void *private_ctx,
+                                   sr_subscr_options_t opts, sr_subscription_ctx_t **subscription)
+{
+    (void)session;
+    (void)callback;
+    (void)private_ctx;
+    (void)opts;
+    (void)subscription;
+    return SR_ERR_OK;
+}
 
-        (*values)[0].xpath = strdup("/ietf-interfaces:interfaces");
-        (*values)[0].type = SR_CONTAINER_T;
-
-        *value_cnt = 1;
-    } else {
-        *values = NULL;
-        *value_cnt = 0;
-    }
-
+int
+__wrap_sr_module_change_subscribe(sr_session_ctx_t *session, const char *module_name, sr_module_change_cb callback,
+                                  void *private_ctx, uint32_t priority, sr_subscr_options_t opts,
+                                  sr_subscription_ctx_t **subscription)
+{
+    (void)session;
+    (void)module_name;
+    (void)callback;
+    (void)private_ctx;
+    (void)priority;
+    (void)opts;
+    (void)subscription;
     return SR_ERR_OK;
 }
 
@@ -217,9 +208,9 @@ __wrap_sr_get_item_next(sr_session_ctx_t *session, sr_val_iter_t *iter, sr_val_t
     char *path;
     (void)session;
 
-    if (!strcmp(xpath, "/ietf-interfaces:interfaces//*")) {
+    if (!strcmp(xpath, "/ietf-interfaces:*//.")) {
         if (!ietf_if_set) {
-            ietf_if_set = lyd_get_node(data, xpath);
+            ietf_if_set = lyd_find_path(data, xpath);
         }
 
         if (!ietf_if_set->number) {
@@ -229,8 +220,9 @@ __wrap_sr_get_item_next(sr_session_ctx_t *session, sr_val_iter_t *iter, sr_val_t
         }
 
         path = lyd_path(ietf_if_set->set.d[0]);
-        *value = malloc(sizeof **value);
+        *value = calloc(1, sizeof **value);
         op_set_srval(ietf_if_set->set.d[0], path, 1, *value, NULL);
+        (*value)->dflt = ietf_if_set->set.d[0]->dflt;
         free(path);
 
         --ietf_if_set->number;
@@ -273,7 +265,7 @@ __wrap_sr_set_item(sr_session_ctx_t *session, const char *xpath, const sr_val_t 
     case SR_CONTAINER_PRESENCE_T:
     case SR_LEAF_EMPTY_T:
         ly_errno = LY_SUCCESS;
-        lyd_new_path(data, np2srv.ly_ctx, xpath, NULL, opt);
+        lyd_new_path(data, np2srv.ly_ctx, xpath, NULL, 0, opt);
         if ((ly_errno == LY_EVALID) && (ly_vecode == LYVE_PATH_EXISTS)) {
             return SR_ERR_DATA_EXISTS;
         }
@@ -281,7 +273,7 @@ __wrap_sr_set_item(sr_session_ctx_t *session, const char *xpath, const sr_val_t 
         break;
     default:
         ly_errno = LY_SUCCESS;
-        lyd_new_path(data, np2srv.ly_ctx, xpath, op_get_srval(np2srv.ly_ctx, (sr_val_t *)value, buf), opt);
+        lyd_new_path(data, np2srv.ly_ctx, xpath, op_get_srval(np2srv.ly_ctx, (sr_val_t *)value, buf), 0, opt);
         if ((ly_errno == LY_EVALID) && (ly_vecode == LYVE_PATH_EXISTS)) {
             return SR_ERR_DATA_EXISTS;
         }
@@ -299,7 +291,7 @@ __wrap_sr_delete_item(sr_session_ctx_t *session, const char *xpath, const sr_edi
     struct ly_set *set;
     uint32_t i;
 
-    set = lyd_get_node(data, xpath);
+    set = lyd_find_path(data, xpath);
     assert_ptr_not_equal(set, NULL);
 
     if ((opts & SR_EDIT_STRICT) && !set->number) {
@@ -326,20 +318,20 @@ __wrap_sr_move_item(sr_session_ctx_t *session, const char *xpath, const sr_move_
     struct ly_set *set, *set2 = NULL;
     struct lyd_node *node;
 
-    set = lyd_get_node(data, xpath);
+    set = lyd_find_path(data, xpath);
     assert_ptr_not_equal(set, NULL);
     assert_int_equal(set->number, 1);
 
     switch (position) {
     case SR_MOVE_BEFORE:
-        set2 = lyd_get_node(data, relative_item);
+        set2 = lyd_find_path(data, relative_item);
         assert_ptr_not_equal(set2, NULL);
         assert_int_equal(set2->number, 1);
 
         assert_int_equal(lyd_insert_before(set2->set.d[0], set->set.d[0]), 0);
         break;
     case SR_MOVE_AFTER:
-        set2 = lyd_get_node(data, relative_item);
+        set2 = lyd_find_path(data, relative_item);
         assert_ptr_not_equal(set2, NULL);
         assert_int_equal(set2->number, 1);
 
@@ -369,84 +361,38 @@ __wrap_sr_commit(sr_session_ctx_t *session)
     return SR_ERR_OK;
 }
 
+int
+__wrap_sr_event_notif_send(sr_session_ctx_t *session, const char *xpath, const sr_val_t *values,
+                           const size_t values_cnt, sr_ev_notif_flag_t opts)
+{
+    (void)session;
+    (void)xpath;
+    (void)values;
+    (void)values_cnt;
+    (void)opts;
+    return SR_ERR_OK;
+}
+
+int
+__wrap_sr_check_exec_permission(sr_session_ctx_t *session, const char *xpath, bool *permitted)
+{
+    (void)session;
+    (void)xpath;
+    *permitted = true;
+    return SR_ERR_OK;
+}
+
+int
+__wrap_sr_session_set_options(sr_session_ctx_t *session, const sr_sess_options_t opts)
+{
+    (void)session;
+    (void)opts;
+    return SR_ERR_OK;
+}
+
 /*
  * LIBNETCONF2 WRAPPER FUNCTIONS
  */
-struct nc_session {
-    NC_STATUS status;
-    NC_SESSION_TERM_REASON term_reason;
-    int side;
-
-    uint32_t id;
-    int version;
-    volatile pthread_t *ntf_tid;
-
-    NC_TRANSPORT_IMPL ti_type;
-    pthread_mutex_t *ti_lock;
-    union {
-        struct {
-            int in;
-            int out;
-        } fd;
-#ifdef NC_ENABLED_SSH
-        struct {
-            void *channel;
-            void *session;
-            struct nc_session *next;
-        } libssh;
-#endif
-#ifdef NC_ENABLED_TLS
-        void *tls;
-#endif
-    } ti;
-    const char *username;
-    const char *host;
-    uint16_t port;
-
-    struct ly_ctx *ctx;
-    void *data;
-    uint8_t flags;
-
-    /* client side only data */
-    uint64_t msgid;
-    const char **cpblts;
-    struct nc_msg_cont *replies;
-    struct nc_msg_cont *notifs;
-
-    /* server side only data */
-    time_t session_start;
-    time_t last_rpc;
-};
-
-struct nc_pollsession {
-    struct pollfd *pfds;
-    struct nc_session **sessions;
-    uint16_t session_count;
-
-    pthread_cond_t cond;
-    pthread_mutex_t lock;
-    uint8_t queue[6];
-    uint8_t queue_begin;
-    uint8_t queue_len;
-};
-
-int
-__wrap_nc_server_ssh_add_endpt_listen(const char *name, const char *address, uint16_t port)
-{
-    (void)name;
-    (void)address;
-    (void)port;
-    return 0;
-}
-
-int
-__wrap_nc_server_ssh_endpt_set_hostkey(const char *endpt_name, const char *privkey_path)
-{
-    (void)endpt_name;
-    (void)privkey_path;
-    return 0;
-}
-
 NC_MSG_TYPE
 __wrap_nc_accept(int timeout, struct nc_session **session)
 {
@@ -470,6 +416,10 @@ __wrap_nc_accept(int timeout, struct nc_session **session)
         (*session)->id = 1;
         (*session)->ti_lock = malloc(sizeof *(*session)->ti_lock);
         pthread_mutex_init((*session)->ti_lock, NULL);
+        (*session)->ti_cond = malloc(sizeof *(*session)->ti_cond);
+        pthread_cond_init((*session)->ti_cond, NULL);
+        (*session)->ti_inuse = malloc(sizeof *(*session)->ti_inuse);
+        *(*session)->ti_inuse = 0;
         (*session)->ti_type = NC_TI_FD;
         (*session)->ti.fd.in = pipes[1][0];
         (*session)->ti.fd.out = pipes[0][1];
@@ -477,7 +427,7 @@ __wrap_nc_accept(int timeout, struct nc_session **session)
         (*session)->flags = 1; //shared ctx
         (*session)->username = "user1";
         (*session)->host = "localhost";
-        (*session)->session_start = (*session)->last_rpc = time(NULL);
+        (*session)->opts.server.session_start = (*session)->opts.server.last_rpc = time(NULL);
         printf("test: New session 1\n");
         initialized = 1;
         ret = NC_MSG_HELLO;
@@ -497,28 +447,16 @@ __wrap_nc_session_free(struct nc_session *session, void (*data_free)(void *))
     }
     pthread_mutex_destroy(session->ti_lock);
     free(session->ti_lock);
+    pthread_cond_destroy(session->ti_cond);
+    free(session->ti_cond);
+    free((int *)session->ti_inuse);
     free(session);
 }
 
-void
-__wrap_nc_ps_clear(struct nc_pollsession *ps, int all, void (*data_free)(void *))
+int
+__wrap_nc_server_endpt_count(void)
 {
-    int i;
-
-    if (!all) {
-        fail();
-    }
-
-    for (i = 0; i < ps->session_count; ++i) {
-        for (i = 0; i < ps->session_count; i++) {
-            nc_session_free(ps->sessions[i], data_free);
-        }
-        free(ps->sessions);
-        ps->sessions = NULL;
-        free(ps->pfds);
-        ps->pfds = NULL;
-        ps->session_count = 0;
-    }
+    return 1;
 }
 
 /*
@@ -736,7 +674,7 @@ np_stop(void **state)
     (void)state; /* unused */
     int64_t ret;
 
-    lyd_free(data);
+    lyd_free_withsiblings(data);
 
     control = LOOP_STOP;
     assert_int_equal(pthread_join(server_tid, (void **)&ret), 0);
@@ -1378,17 +1316,27 @@ test_edit_merge(void **state)
     test_read(p_in, get_config_rpl, __LINE__);
 }
 
+static void
+test_startstop(void **state)
+{
+    (void)state; /* unused */
+    return;
+}
+
+
 int
 main(void)
 {
     const struct CMUnitTest tests[] = {
-                    cmocka_unit_test_setup(test_edit_delete1, np_start),
+                    cmocka_unit_test_setup(test_startstop, np_start),
+                    cmocka_unit_test(test_edit_delete1),
                     cmocka_unit_test(test_edit_delete2),
                     cmocka_unit_test(test_edit_delete3),
                     cmocka_unit_test(test_edit_create1),
                     cmocka_unit_test(test_edit_create2),
                     cmocka_unit_test(test_edit_create3),
-                    cmocka_unit_test_teardown(test_edit_merge, np_stop),
+                    cmocka_unit_test(test_edit_merge),
+                    cmocka_unit_test_teardown(test_startstop, np_stop),
     };
 
     if (setenv("CMOCKA_TEST_ABORT", "1", 1)) {

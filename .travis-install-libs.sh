@@ -1,9 +1,14 @@
 #!/bin/sh
 
+if [[ (( "$TRAVIS_BRANCH" == *"master"* )) || (( "$TRAVIS_TAG" =~ "v"[0-9]+"."[0-9]+"."[0-9]+ )) ]]; then
+    BRANCH="master"
+else
+    BRANCH="devel"
+fi
+
 sudo apt-get update -qq
-sudo apt-get install -y libavl-dev libev-dev
 sudo apt-get install -y zlib1g-dev libssl-dev
-sudo apt-get install -y valgrind
+sudo apt-get install -y --force-yes libavl-dev libev-dev coreutils acl valgrind
 
 if [ ! -d "cmocka-1.0.1/build" ]; then
     echo "Building cmocka from source."
@@ -19,36 +24,37 @@ else
     cd ../..
 fi
 
-git clone https://github.com/CESNET/libyang.git
+git clone -b $BRANCH https://github.com/CESNET/libyang.git
 cd libyang; mkdir build; cd build
 cmake -DCMAKE_INSTALL_PREFIX:PATH=/usr -DCMAKE_BUILD_TYPE=Release ..
 make -j2 && sudo make install
 cd ../..
 
-if [ ! -d "libssh-0.7.3/build" ]; then
+if [ ! -d "libssh-0.7.5/build" ]; then
     echo "Building libssh from source."
-    wget https://git.libssh.org/projects/libssh.git/snapshot/libssh-0.7.3.tar.bz2
-    tar -xjf libssh-0.7.3.tar.bz2
-    cd libssh-0.7.3 && mkdir build && cd build
+    wget https://git.libssh.org/projects/libssh.git/snapshot/libssh-0.7.5.tar.gz
+    tar -xzf libssh-0.7.5.tar.gz
+    mkdir libssh-0.7.5/build && cd libssh-0.7.5/build
     cmake -DCMAKE_INSTALL_PREFIX:PATH=/usr .. && make -j2 && sudo make install
     cd ../..
 else
     echo "Using libssh from cache."
-    cd libssh-0.7.3/build
+    cd libssh-0.7.5/build
     sudo make install
     cd ../..
 fi
 
-git clone https://github.com/CESNET/libnetconf2.git
+git clone -b $BRANCH https://github.com/CESNET/libnetconf2.git
 cd libnetconf2; mkdir build; cd build
 cmake -DCMAKE_INSTALL_PREFIX:PATH=/usr -DCMAKE_BUILD_TYPE=Release ..
 make -j2 && sudo make install
 cd ../..
 
-if [ ! -d "protobuf/README.md" ]; then
+if [ ! -f "protobuf/Makefile" ]; then
     echo "Building protobuf from source."
-    git clone https://github.com/google/protobuf.git
-    cd protobuf
+    wget https://github.com/google/protobuf/archive/v3.2.0.tar.gz
+    tar -xzf v3.2.0.tar.gz
+    cd protobuf-3.2.0
     ./autogen.sh && ./configure --prefix=/usr && make -j2 && sudo make install
     cd ..
 else
@@ -58,10 +64,11 @@ else
     cd ..
 fi
 
-if [ ! -d "protobuf-c/README.md" ]; then
+if [ ! -f "protobuf-c/Makefile" ]; then
     echo "Building protobuf-c from source."
-    git clone https://github.com/protobuf-c/protobuf-c.git
-    cd protobuf-c
+    wget https://github.com/protobuf-c/protobuf-c/archive/v1.2.1.tar.gz
+    tar -xzf v1.2.1.tar.gz
+    cd protobuf-c-1.2.1
     ./autogen.sh && ./configure --prefix=/usr && make -j2 && sudo make install
     cd ..
 else
@@ -71,9 +78,9 @@ else
     cd ..
 fi
 
-git clone https://github.com/sysrepo/sysrepo.git
+git clone -b $BRANCH https://github.com/sysrepo/sysrepo.git
 cd sysrepo; mkdir build; cd build
-cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr -DENABLE_TESTS=False -DREPOSITORY_LOC:PATH=/ets/sysrepo ..
+cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX:PATH=/usr -DBUILD_EXAMPLES=False -DENABLE_TESTS=False -DGEN_LANGUAGE_BINDINGS=0 -DREPOSITORY_LOC:PATH=/ets/sysrepo ..
 make -j2 && sudo make install
 cd ../..
 

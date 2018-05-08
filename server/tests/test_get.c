@@ -65,21 +65,12 @@ int
 __wrap_sr_list_schemas(sr_session_ctx_t *session, sr_schema_t **schemas, size_t *schema_cnt)
 {
     (void)session;
-    *schemas = NULL;
-    *schema_cnt = 0;
-    return SR_ERR_OK;
-}
 
-int
-__wrap_sr_get_schema(sr_session_ctx_t *session, const char *module_name, const char *revision,
-                     const char *submodule_name, sr_schema_format_t format, char **schema_content)
-{
-    (void)session;
-    (void)module_name;
-    (void)revision;
-    (void)submodule_name;
-    (void)format;
-    (void)schema_content;
+    *schemas = calloc(1, sizeof **schemas);
+    *schema_cnt = 1;
+    (*schemas)[0].module_name = strdup("ietf-netconf-server");
+    (*schemas)[0].installed = 1;
+
     return SR_ERR_OK;
 }
 
@@ -116,6 +107,45 @@ __wrap_sr_session_refresh(sr_session_ctx_t *session)
 }
 
 int
+__wrap_sr_module_install_subscribe(sr_session_ctx_t *session, sr_module_install_cb callback, void *private_ctx,
+                                   sr_subscr_options_t opts, sr_subscription_ctx_t **subscription)
+{
+    (void)session;
+    (void)callback;
+    (void)private_ctx;
+    (void)opts;
+    (void)subscription;
+    return SR_ERR_OK;
+}
+
+int
+__wrap_sr_feature_enable_subscribe(sr_session_ctx_t *session, sr_feature_enable_cb callback, void *private_ctx,
+                                   sr_subscr_options_t opts, sr_subscription_ctx_t **subscription)
+{
+    (void)session;
+    (void)callback;
+    (void)private_ctx;
+    (void)opts;
+    (void)subscription;
+    return SR_ERR_OK;
+}
+
+int
+__wrap_sr_module_change_subscribe(sr_session_ctx_t *session, const char *module_name, sr_module_change_cb callback,
+                                  void *private_ctx, uint32_t priority, sr_subscr_options_t opts,
+                                  sr_subscription_ctx_t **subscription)
+{
+    (void)session;
+    (void)module_name;
+    (void)callback;
+    (void)private_ctx;
+    (void)priority;
+    (void)opts;
+    (void)subscription;
+    return SR_ERR_OK;
+}
+
+int
 __wrap_sr_get_items(sr_session_ctx_t *session, const char *xpath, sr_val_t **values, size_t *value_cnt)
 {
     (void)session;
@@ -125,84 +155,30 @@ __wrap_sr_get_items(sr_session_ctx_t *session, const char *xpath, sr_val_t **val
     return SR_ERR_OK;
 }
 
+int
+__wrap_sr_event_notif_send(sr_session_ctx_t *session, const char *xpath, const sr_val_t *values,
+                           const size_t values_cnt, sr_ev_notif_flag_t opts)
+{
+    (void)session;
+    (void)xpath;
+    (void)values;
+    (void)values_cnt;
+    (void)opts;
+    return SR_ERR_OK;
+}
+
+int
+__wrap_sr_check_exec_permission(sr_session_ctx_t *session, const char *xpath, bool *permitted)
+{
+    (void)session;
+    (void)xpath;
+    *permitted = true;
+    return SR_ERR_OK;
+}
+
 /*
  * LIBNETCONF2 WRAPPER FUNCTIONS
  */
-struct nc_session {
-    NC_STATUS status;
-    NC_SESSION_TERM_REASON term_reason;
-    int side;
-
-    uint32_t id;
-    int version;
-    volatile pthread_t *ntf_tid;
-
-    NC_TRANSPORT_IMPL ti_type;
-    pthread_mutex_t *ti_lock;
-    union {
-        struct {
-            int in;
-            int out;
-        } fd;
-#ifdef NC_ENABLED_SSH
-        struct {
-            void *channel;
-            void *session;
-            struct nc_session *next;
-        } libssh;
-#endif
-#ifdef NC_ENABLED_TLS
-        void *tls;
-#endif
-    } ti;
-    const char *username;
-    const char *host;
-    uint16_t port;
-
-    struct ly_ctx *ctx;
-    void *data;
-    uint8_t flags;
-
-    /* client side only data */
-    uint64_t msgid;
-    const char **cpblts;
-    struct nc_msg_cont *replies;
-    struct nc_msg_cont *notifs;
-
-    /* server side only data */
-    time_t session_start;
-    time_t last_rpc;
-};
-
-struct nc_pollsession {
-    struct pollfd *pfds;
-    struct nc_session **sessions;
-    uint16_t session_count;
-
-    pthread_cond_t cond;
-    pthread_mutex_t lock;
-    uint8_t queue[6];
-    uint8_t queue_begin;
-    uint8_t queue_len;
-};
-
-int
-__wrap_nc_server_ssh_add_endpt_listen(const char *name, const char *address, uint16_t port)
-{
-    (void)name;
-    (void)address;
-    (void)port;
-    return 0;
-}
-
-int
-__wrap_nc_server_ssh_endpt_set_hostkey(const char *endpt_name, const char *privkey_path)
-{
-    (void)endpt_name;
-    (void)privkey_path;
-    return 0;
-}
-
 NC_MSG_TYPE
 __wrap_nc_accept(int timeout, struct nc_session **session)
 {
@@ -226,6 +202,10 @@ __wrap_nc_accept(int timeout, struct nc_session **session)
         (*session)->id = 1;
         (*session)->ti_lock = malloc(sizeof *(*session)->ti_lock);
         pthread_mutex_init((*session)->ti_lock, NULL);
+        (*session)->ti_cond = malloc(sizeof *(*session)->ti_cond);
+        pthread_cond_init((*session)->ti_cond, NULL);
+        (*session)->ti_inuse = malloc(sizeof *(*session)->ti_inuse);
+        *(*session)->ti_inuse = 0;
         (*session)->ti_type = NC_TI_FD;
         (*session)->ti.fd.in = pipes[1][0];
         (*session)->ti.fd.out = pipes[0][1];
@@ -233,7 +213,7 @@ __wrap_nc_accept(int timeout, struct nc_session **session)
         (*session)->flags = 1; //shared ctx
         (*session)->username = "user1";
         (*session)->host = "localhost";
-        (*session)->session_start = (*session)->last_rpc = time(NULL);
+        (*session)->opts.server.session_start = (*session)->opts.server.last_rpc = time(NULL);
         printf("test: New session 1\n");
         initialized = 1;
         ret = NC_MSG_HELLO;
@@ -253,28 +233,16 @@ __wrap_nc_session_free(struct nc_session *session, void (*data_free)(void *))
     }
     pthread_mutex_destroy(session->ti_lock);
     free(session->ti_lock);
+    pthread_cond_destroy(session->ti_cond);
+    free(session->ti_cond);
+    free((int *)session->ti_inuse);
     free(session);
 }
 
-void
-__wrap_nc_ps_clear(struct nc_pollsession *ps, int all, void (*data_free)(void *))
+int
+__wrap_nc_server_endpt_count(void)
 {
-    int i;
-
-    if (!all) {
-        fail();
-    }
-
-    for (i = 0; i < ps->session_count; ++i) {
-        for (i = 0; i < ps->session_count; i++) {
-            nc_session_free(ps->sessions[i], data_free);
-        }
-        free(ps->sessions);
-        ps->sessions = NULL;
-        free(ps->pfds);
-        ps->pfds = NULL;
-        ps->session_count = 0;
-    }
+    return 1;
 }
 
 /*
@@ -352,9 +320,9 @@ test_read(int fd, const char *template, int line)
     buf[red] = '\0';
 
     /* unify all datetimes */
-    for (ptr = strstr(buf, "+02:00"); ptr; ptr = strstr(ptr + 1, "+02:00")) {
+    for (ptr = strchr(buf, '+'); ptr; ptr = strchr(ptr + 1, '+')) {
         if ((ptr[-3] == ':') && (ptr[-6] == ':') && (ptr[-9] == 'T') && (ptr[-12] == '-') && (ptr[-15] == '-')) {
-            strncpy(ptr - 19, "0000-00-00T00:00:00", 19);
+            strncpy(ptr - 19, "0000-00-00T00:00:00+00:00", 25);
         }
     }
 
@@ -421,10 +389,128 @@ test_get(void **state)
     const char *get_rpl =
     "<rpc-reply msgid=\"1\" xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">"
         "<data xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">"
+    		"<yang-library xmlns=\"urn:ietf:params:xml:ns:yang:ietf-yang-library\">"
+            "<modules>"
+            "<module>"
+    		    "<id>0</id>"
+                "<name>ietf-yang-metadata</name>"
+                "<revision>2016-08-05</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-metadata</namespace>"
+                "<conformance-type>import</conformance-type>"
+            "</module>"
+            "<module>"
+		        "<id>1</id>"
+                "<name>yang</name>"
+                "<revision>2017-02-20</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:1</namespace>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+            "<module>"
+		        "<id>2</id>"
+                "<name>ietf-inet-types</name>"
+                "<revision>2013-07-15</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-inet-types</namespace>"
+                "<conformance-type>import</conformance-type>"
+            "</module>"
+            "<module>"
+		        "<id>3</id>"
+                "<name>ietf-yang-types</name>"
+                "<revision>2013-07-15</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-types</namespace>"
+                "<conformance-type>import</conformance-type>"
+            "</module>"
+            "<module>"
+		        "<id>4</id>"
+                "<name>ietf-datastores</name>"
+                "<revision>2017-08-17</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-datastores</namespace>"
+                "<conformance-type>import</conformance-type>"
+            "</module>"
+            "<module>"
+		        "<id>5</id>"
+                "<name>ietf-yang-library</name>"
+                "<revision>2017-08-17</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-library</namespace>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+            "<module>"
+		        "<id>6</id>"
+                "<name>ietf-netconf-server</name>"
+                "<revision/>"
+                "<namespace>ns</namespace>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+            "<module>"
+		        "<id>7</id>"
+                "<name>ietf-netconf-acm</name>"
+                "<revision>2012-02-22</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-acm</namespace>"
+                "<conformance-type>import</conformance-type>"
+            "</module>"
+            "<module>"
+	            "<id>8</id>"
+                "<name>ietf-netconf</name>"
+                "<revision>2011-06-01</revision>"
+                "<namespace>urn:ietf:params:xml:ns:netconf:base:1.0</namespace>"
+                "<feature>writable-running</feature>"
+                "<feature>candidate</feature>"
+                "<feature>rollback-on-error</feature>"
+                "<feature>validate</feature>"
+                "<feature>startup</feature>"
+                "<feature>xpath</feature>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+            "<module>"
+	            "<id>9</id>"
+                "<name>ietf-netconf-monitoring</name>"
+                "<revision>2010-10-04</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring</namespace>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+            "<module>"
+	            "<id>10</id>"
+                "<name>ietf-netconf-with-defaults</name>"
+                "<revision>2011-06-01</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-with-defaults</namespace>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+            "<module>"
+	            "<id>11</id>"
+                "<name>notifications</name>"
+                "<revision>2008-07-14</revision>"
+                "<namespace>urn:ietf:params:xml:ns:netconf:notification:1.0</namespace>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+            "<module>"
+	            "<id>12</id>"
+                "<name>nc-notifications</name>"
+                "<revision>2008-07-14</revision>"
+                "<namespace>urn:ietf:params:xml:ns:netmod:notification</namespace>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+            "<module>"
+	            "<id>13</id>"
+                "<name>ietf-netconf-notifications</name>"
+                "<revision>2012-02-06</revision>"
+                "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-notifications</namespace>"
+                "<conformance-type>implement</conformance-type>"
+            "</module>"
+    		"</modules><module-sets><module-set><id>complete</id>"
+    		    "<module>0</module><module>1</module><module>2</module><module>3</module><module>4</module>"
+    		    "<module>5</module><module>6</module><module>7</module><module>8</module><module>9</module>"
+    		    "<module>10</module><module>11</module><module>12</module><module>13</module>"
+    		    "</module-set></module-sets><checksum>15</checksum>"
+    		"</yang-library>"
             "<modules-state xmlns=\"urn:ietf:params:xml:ns:yang:ietf-yang-library\">"
                 "<module>"
+                    "<name>ietf-yang-metadata</name>"
+                    "<revision>2016-08-05</revision>"
+                    "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-metadata</namespace>"
+                    "<conformance-type>import</conformance-type>"
+                "</module>"
+                "<module>"
                     "<name>yang</name>"
-                    "<revision>2016-02-11</revision>"
+                    "<revision>2017-02-20</revision>"
                     "<namespace>urn:ietf:params:xml:ns:yang:1</namespace>"
                     "<conformance-type>implement</conformance-type>"
                 "</module>"
@@ -441,16 +527,28 @@ test_get(void **state)
                     "<conformance-type>import</conformance-type>"
                 "</module>"
                 "<module>"
+                    "<name>ietf-datastores</name>"
+                    "<revision>2017-08-17</revision>"
+                    "<namespace>urn:ietf:params:xml:ns:yang:ietf-datastores</namespace>"
+                    "<conformance-type>import</conformance-type>"
+                "</module>"
+                "<module>"
                     "<name>ietf-yang-library</name>"
-                    "<revision>2016-02-01</revision>"
+                    "<revision>2017-08-17</revision>"
                     "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-library</namespace>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>ietf-netconf-server</name>"
+                    "<revision/>"
+                    "<namespace>ns</namespace>"
                     "<conformance-type>implement</conformance-type>"
                 "</module>"
                 "<module>"
                     "<name>ietf-netconf-acm</name>"
                     "<revision>2012-02-22</revision>"
                     "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-acm</namespace>"
-                    "<conformance-type>implement</conformance-type>"
+                    "<conformance-type>import</conformance-type>"
                 "</module>"
                 "<module>"
                     "<name>ietf-netconf</name>"
@@ -476,7 +574,25 @@ test_get(void **state)
                     "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-with-defaults</namespace>"
                     "<conformance-type>implement</conformance-type>"
                 "</module>"
-                "<module-set-id>9</module-set-id>"
+                "<module>"
+                    "<name>notifications</name>"
+                    "<revision>2008-07-14</revision>"
+                    "<namespace>urn:ietf:params:xml:ns:netconf:notification:1.0</namespace>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>nc-notifications</name>"
+                    "<revision>2008-07-14</revision>"
+                    "<namespace>urn:ietf:params:xml:ns:netmod:notification</namespace>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>ietf-netconf-notifications</name>"
+                    "<revision>2012-02-06</revision>"
+                    "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-notifications</namespace>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module-set-id>15</module-set-id>"
             "</modules-state>"
             "<netconf-state xmlns=\"urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring\">"
                 "<capabilities>"
@@ -489,14 +605,22 @@ test_get(void **state)
                     "<capability>urn:ietf:params:netconf:capability:startup:1.0</capability>"
                     "<capability>urn:ietf:params:netconf:capability:xpath:1.0</capability>"
                     "<capability>urn:ietf:params:netconf:capability:with-defaults:1.0?basic-mode=explicit&amp;also-supported=report-all,report-all-tagged,trim,explicit</capability>"
-                    "<capability>urn:ietf:params:xml:ns:yang:1?module=yang&amp;revision=2016-02-11</capability>"
+                    "<capability>urn:ietf:params:netconf:capability:notification:1.0</capability>"
+                    "<capability>urn:ietf:params:netconf:capability:interleave:1.0</capability>"
+                    "<capability>urn:ietf:params:xml:ns:yang:ietf-yang-metadata?module=ietf-yang-metadata&amp;revision=2016-08-05</capability>"
+                    "<capability>urn:ietf:params:xml:ns:yang:1?module=yang&amp;revision=2017-02-20</capability>"
                     "<capability>urn:ietf:params:xml:ns:yang:ietf-inet-types?module=ietf-inet-types&amp;revision=2013-07-15</capability>"
                     "<capability>urn:ietf:params:xml:ns:yang:ietf-yang-types?module=ietf-yang-types&amp;revision=2013-07-15</capability>"
-                    "<capability>urn:ietf:params:xml:ns:yang:ietf-yang-library?module=ietf-yang-library&amp;revision=2016-02-01</capability>"
+                    "<capability>urn:ietf:params:xml:ns:yang:ietf-datastores?module=ietf-datastores&amp;revision=2017-08-17</capability>"
+                    "<capability>urn:ietf:params:xml:ns:yang:ietf-yang-library?module=ietf-yang-library&amp;revision=2017-08-17&amp;module-set-id=15</capability>"
+                    "<capability>ns?module=ietf-netconf-server</capability>"
                     "<capability>urn:ietf:params:xml:ns:yang:ietf-netconf-acm?module=ietf-netconf-acm&amp;revision=2012-02-22</capability>"
                     "<capability>urn:ietf:params:xml:ns:netconf:base:1.0?module=ietf-netconf&amp;revision=2011-06-01&amp;features=writable-running,candidate,rollback-on-error,validate,startup,xpath</capability>"
                     "<capability>urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring?module=ietf-netconf-monitoring&amp;revision=2010-10-04</capability>"
                     "<capability>urn:ietf:params:xml:ns:yang:ietf-netconf-with-defaults?module=ietf-netconf-with-defaults&amp;revision=2011-06-01</capability>"
+                    "<capability>urn:ietf:params:xml:ns:netconf:notification:1.0?module=notifications&amp;revision=2008-07-14</capability>"
+                    "<capability>urn:ietf:params:xml:ns:netmod:notification?module=nc-notifications&amp;revision=2008-07-14</capability>"
+                    "<capability>urn:ietf:params:xml:ns:yang:ietf-netconf-notifications?module=ietf-netconf-notifications&amp;revision=2012-02-06</capability>"
                 "</capabilities>"
                 "<datastores>"
                     "<datastore>"
@@ -511,15 +635,29 @@ test_get(void **state)
                 "</datastores>"
                 "<schemas>"
                     "<schema>"
+                        "<identifier>ietf-yang-metadata</identifier>"
+                        "<version>2016-08-05</version>"
+                        "<format>yang</format>"
+                        "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-metadata</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-yang-metadata</identifier>"
+                        "<version>2016-08-05</version>"
+                        "<format>yin</format>"
+                        "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-metadata</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
                         "<identifier>yang</identifier>"
-                        "<version>2016-02-11</version>"
+                        "<version>2017-02-20</version>"
                         "<format>yang</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:1</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
                     "<schema>"
                         "<identifier>yang</identifier>"
-                        "<version>2016-02-11</version>"
+                        "<version>2017-02-20</version>"
                         "<format>yin</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:1</namespace>"
                         "<location>NETCONF</location>"
@@ -552,18 +690,46 @@ test_get(void **state)
                         "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-types</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
+					"<schema>"
+						"<identifier>ietf-datastores</identifier>"
+						"<version>2017-08-17</version>"
+						"<format>yang</format>"
+						"<namespace>urn:ietf:params:xml:ns:yang:ietf-datastores</namespace>"
+						"<location>NETCONF</location>"
+					"</schema>"
+					"<schema>"
+						"<identifier>ietf-datastores</identifier>"
+						"<version>2017-08-17</version>"
+						"<format>yin</format>"
+						"<namespace>urn:ietf:params:xml:ns:yang:ietf-datastores</namespace>"
+						"<location>NETCONF</location>"
+					"</schema>"
                     "<schema>"
                         "<identifier>ietf-yang-library</identifier>"
-                        "<version>2016-02-01</version>"
+                        "<version>2017-08-17</version>"
                         "<format>yang</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-library</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
                     "<schema>"
                         "<identifier>ietf-yang-library</identifier>"
-                        "<version>2016-02-01</version>"
+                        "<version>2017-08-17</version>"
                         "<format>yin</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-library</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-netconf-server</identifier>"
+                        "<version/>"
+                        "<format>yang</format>"
+                        "<namespace>ns</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-netconf-server</identifier>"
+                        "<version/>"
+                        "<format>yin</format>"
+                        "<namespace>ns</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
                     "<schema>"
@@ -620,26 +786,55 @@ test_get(void **state)
                         "<version>2011-06-01</version>"
                         "<format>yin</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-with-defaults</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>notifications</identifier>"
+                        "<version>2008-07-14</version>"
+                        "<format>yang</format>"
+                        "<namespace>urn:ietf:params:xml:ns:netconf:notification:1.0</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>notifications</identifier>"
+                        "<version>2008-07-14</version>"
+                        "<format>yin</format>"
+                        "<namespace>urn:ietf:params:xml:ns:netconf:notification:1.0</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>nc-notifications</identifier>"
+                        "<version>2008-07-14</version>"
+                        "<format>yang</format>"
+                        "<namespace>urn:ietf:params:xml:ns:netmod:notification</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>nc-notifications</identifier>"
+                        "<version>2008-07-14</version>"
+                        "<format>yin</format>"
+                        "<namespace>urn:ietf:params:xml:ns:netmod:notification</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-netconf-notifications</identifier>"
+                        "<version>2012-02-06</version>"
+                        "<format>yang</format>"
+                        "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-notifications</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-netconf-notifications</identifier>"
+                        "<version>2012-02-06</version>"
+                        "<format>yin</format>"
+                        "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-notifications</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
                 "</schemas>"
-                "<sessions>"
-                    "<session>"
-                        "<session-id>1</session-id>"
-                        "<transport>transport</transport>"
-                        "<username>user1</username>"
-                        "<source-host>localhost</source-host>"
-                        "<login-time>0000-00-00T00:00:00+02:00</login-time>"
-                        "<in-rpcs>0</in-rpcs>"
-                        "<in-bad-rpcs>0</in-bad-rpcs>"
-                        "<out-rpc-errors>0</out-rpc-errors>"
-                        "<out-notifications>0</out-notifications>"
-                    "</session>"
-                "</sessions>"
                 "<statistics>"
-                    "<netconf-start-time>0000-00-00T00:00:00+02:00</netconf-start-time>"
+                    "<netconf-start-time>0000-00-00T00:00:00+00:00</netconf-start-time>"
                     "<in-bad-hellos>0</in-bad-hellos>"
-                    "<in-sessions>1</in-sessions>"
+                    "<in-sessions>0</in-sessions>"
                     "<dropped-sessions>0</dropped-sessions>"
                     "<in-rpcs>0</in-rpcs>"
                     "<in-bad-rpcs>0</in-bad-rpcs>"
@@ -647,6 +842,27 @@ test_get(void **state)
                     "<out-notifications>0</out-notifications>"
                 "</statistics>"
             "</netconf-state>"
+            "<netconf xmlns=\"urn:ietf:params:xml:ns:netmod:notification\">"
+                "<streams>"
+                    "<stream>"
+                        "<name>NETCONF</name>"
+                        "<description>Default NETCONF stream containing all the Event Notifications.</description>"
+                        "<replaySupport>true</replaySupport>"
+                    "</stream>"
+                    "<stream>"
+                        "<name>ietf-yang-library</name>"
+                        "<replaySupport>false</replaySupport>"
+                    "</stream>"
+                    "<stream>"
+                        "<name>nc-notifications</name>"
+                        "<replaySupport>true</replaySupport>"
+                    "</stream>"
+                    "<stream>"
+                        "<name>ietf-netconf-notifications</name>"
+                        "<replaySupport>true</replaySupport>"
+                    "</stream>"
+                "</streams>"
+            "</netconf>"
         "</data>"
     "</rpc-reply>";
 
@@ -667,7 +883,7 @@ test_get_filter1(void **state)
     "</rpc>";
     const char *get_rpl =
     "<rpc-reply msgid=\"1\" xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">"
-        "<data xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\"></data>"
+        "<data xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\"/>"
     "</rpc-reply>";
 
     test_write(p_out, get_rpc, __LINE__);
@@ -696,26 +912,25 @@ test_get_filter2(void **state)
             "<modules-state xmlns=\"urn:ietf:params:xml:ns:yang:ietf-yang-library\">"
                 "<module>"
                     "<name>yang</name>"
-                    "<revision>2016-02-11</revision>"
-                    "<conformance-type>implement</conformance-type>"
+                    "<revision>2017-02-20</revision>"
                     "<namespace>urn:ietf:params:xml:ns:yang:1</namespace>"
+                    "<conformance-type>implement</conformance-type>"
                 "</module>"
                 "<module>"
                     "<name>ietf-yang-library</name>"
-                    "<revision>2016-02-01</revision>"
-                    "<conformance-type>implement</conformance-type>"
+                    "<revision>2017-08-17</revision>"
                     "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-library</namespace>"
+                    "<conformance-type>implement</conformance-type>"
                 "</module>"
                 "<module>"
-                    "<name>ietf-netconf-acm</name>"
-                    "<revision>2012-02-22</revision>"
+                    "<name>ietf-netconf-server</name>"
+                    "<revision/>"
+                    "<namespace>ns</namespace>"
                     "<conformance-type>implement</conformance-type>"
-                    "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-acm</namespace>"
                 "</module>"
                 "<module>"
                     "<name>ietf-netconf</name>"
                     "<revision>2011-06-01</revision>"
-                    "<conformance-type>implement</conformance-type>"
                     "<namespace>urn:ietf:params:xml:ns:netconf:base:1.0</namespace>"
                     "<feature>writable-running</feature>"
                     "<feature>candidate</feature>"
@@ -723,18 +938,37 @@ test_get_filter2(void **state)
                     "<feature>validate</feature>"
                     "<feature>startup</feature>"
                     "<feature>xpath</feature>"
+                    "<conformance-type>implement</conformance-type>"
                 "</module>"
                 "<module>"
                     "<name>ietf-netconf-monitoring</name>"
                     "<revision>2010-10-04</revision>"
-                    "<conformance-type>implement</conformance-type>"
                     "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring</namespace>"
+                    "<conformance-type>implement</conformance-type>"
                 "</module>"
                 "<module>"
                     "<name>ietf-netconf-with-defaults</name>"
                     "<revision>2011-06-01</revision>"
-                    "<conformance-type>implement</conformance-type>"
                     "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-with-defaults</namespace>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>notifications</name>"
+                    "<revision>2008-07-14</revision>"
+                    "<namespace>urn:ietf:params:xml:ns:netconf:notification:1.0</namespace>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>nc-notifications</name>"
+                    "<revision>2008-07-14</revision>"
+                    "<namespace>urn:ietf:params:xml:ns:netmod:notification</namespace>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>ietf-netconf-notifications</name>"
+                    "<revision>2012-02-06</revision>"
+                    "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-notifications</namespace>"
+                    "<conformance-type>implement</conformance-type>"
                 "</module>"
             "</modules-state>"
         "</data>"
@@ -767,17 +1001,17 @@ test_get_filter3(void **state)
             "<modules-state xmlns=\"urn:ietf:params:xml:ns:yang:ietf-yang-library\">"
                 "<module>"
                     "<name>yang</name>"
-                    "<revision>2016-02-11</revision>"
+                    "<revision>2017-02-20</revision>"
                     "<conformance-type>implement</conformance-type>"
                 "</module>"
                 "<module>"
                     "<name>ietf-yang-library</name>"
-                    "<revision>2016-02-01</revision>"
+                    "<revision>2017-08-17</revision>"
                     "<conformance-type>implement</conformance-type>"
                 "</module>"
                 "<module>"
-                    "<name>ietf-netconf-acm</name>"
-                    "<revision>2012-02-22</revision>"
+                    "<name>ietf-netconf-server</name>"
+                    "<revision/>"
                     "<conformance-type>implement</conformance-type>"
                 "</module>"
                 "<module>"
@@ -793,6 +1027,21 @@ test_get_filter3(void **state)
                 "<module>"
                     "<name>ietf-netconf-with-defaults</name>"
                     "<revision>2011-06-01</revision>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>notifications</name>"
+                    "<revision>2008-07-14</revision>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>nc-notifications</name>"
+                    "<revision>2008-07-14</revision>"
+                    "<conformance-type>implement</conformance-type>"
+                "</module>"
+                "<module>"
+                    "<name>ietf-netconf-notifications</name>"
+                    "<revision>2012-02-06</revision>"
                     "<conformance-type>implement</conformance-type>"
                 "</module>"
             "</modules-state>"
@@ -825,8 +1074,12 @@ test_get_filter4(void **state)
         "<data xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">"
             "<modules-state xmlns=\"urn:ietf:params:xml:ns:yang:ietf-yang-library\">"
                 "<module>"
+                    "<name>ietf-yang-metadata</name>"
+                    "<revision>2016-08-05</revision>"
+                "</module>"
+                "<module>"
                     "<name>yang</name>"
-                    "<revision>2016-02-11</revision>"
+                    "<revision>2017-02-20</revision>"
                 "</module>"
                 "<module>"
                     "<name>ietf-inet-types</name>"
@@ -836,9 +1089,17 @@ test_get_filter4(void **state)
                     "<name>ietf-yang-types</name>"
                     "<revision>2013-07-15</revision>"
                 "</module>"
+				"<module>"
+					"<name>ietf-datastores</name>"
+					"<revision>2017-08-17</revision>"
+				"</module>"
                 "<module>"
                     "<name>ietf-yang-library</name>"
-                    "<revision>2016-02-01</revision>"
+                    "<revision>2017-08-17</revision>"
+                "</module>"
+                "<module>"
+                    "<name>ietf-netconf-server</name>"
+                    "<revision/>"
                 "</module>"
                 "<module>"
                     "<name>ietf-netconf-acm</name>"
@@ -861,6 +1122,18 @@ test_get_filter4(void **state)
                 "<module>"
                     "<name>ietf-netconf-with-defaults</name>"
                     "<revision>2011-06-01</revision>"
+                "</module>"
+                "<module>"
+                    "<name>notifications</name>"
+                    "<revision>2008-07-14</revision>"
+                "</module>"
+                "<module>"
+                    "<name>nc-notifications</name>"
+                    "<revision>2008-07-14</revision>"
+                "</module>"
+                "<module>"
+                    "<name>ietf-netconf-notifications</name>"
+                    "<revision>2012-02-06</revision>"
                 "</module>"
             "</modules-state>"
         "</data>"
@@ -892,15 +1165,29 @@ test_get_filter5(void **state)
             "<netconf-state xmlns=\"urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring\">"
                 "<schemas>"
                     "<schema>"
+                        "<identifier>ietf-yang-metadata</identifier>"
+                        "<version>2016-08-05</version>"
+                        "<format>yang</format>"
+                        "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-metadata</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-yang-metadata</identifier>"
+                        "<version>2016-08-05</version>"
+                        "<format>yin</format>"
+                        "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-metadata</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
                         "<identifier>yang</identifier>"
-                        "<version>2016-02-11</version>"
+                        "<version>2017-02-20</version>"
                         "<format>yang</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:1</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
                     "<schema>"
                         "<identifier>yang</identifier>"
-                        "<version>2016-02-11</version>"
+                        "<version>2017-02-20</version>"
                         "<format>yin</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:1</namespace>"
                         "<location>NETCONF</location>"
@@ -933,18 +1220,46 @@ test_get_filter5(void **state)
                         "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-types</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
+					"<schema>"
+						"<identifier>ietf-datastores</identifier>"
+						"<version>2017-08-17</version>"
+						"<format>yang</format>"
+						"<namespace>urn:ietf:params:xml:ns:yang:ietf-datastores</namespace>"
+						"<location>NETCONF</location>"
+					"</schema>"
+					"<schema>"
+						"<identifier>ietf-datastores</identifier>"
+						"<version>2017-08-17</version>"
+						"<format>yin</format>"
+						"<namespace>urn:ietf:params:xml:ns:yang:ietf-datastores</namespace>"
+						"<location>NETCONF</location>"
+					"</schema>"
                     "<schema>"
                         "<identifier>ietf-yang-library</identifier>"
-                        "<version>2016-02-01</version>"
+                        "<version>2017-08-17</version>"
                         "<format>yang</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-library</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
                     "<schema>"
                         "<identifier>ietf-yang-library</identifier>"
-                        "<version>2016-02-01</version>"
+                        "<version>2017-08-17</version>"
                         "<format>yin</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:ietf-yang-library</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-netconf-server</identifier>"
+                        "<version/>"
+                        "<format>yang</format>"
+                        "<namespace>ns</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-netconf-server</identifier>"
+                        "<version/>"
+                        "<format>yin</format>"
+                        "<namespace>ns</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
                     "<schema>"
@@ -1001,11 +1316,81 @@ test_get_filter5(void **state)
                         "<version>2011-06-01</version>"
                         "<format>yin</format>"
                         "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-with-defaults</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>notifications</identifier>"
+                        "<version>2008-07-14</version>"
+                        "<format>yang</format>"
+                        "<namespace>urn:ietf:params:xml:ns:netconf:notification:1.0</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>notifications</identifier>"
+                        "<version>2008-07-14</version>"
+                        "<format>yin</format>"
+                        "<namespace>urn:ietf:params:xml:ns:netconf:notification:1.0</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>nc-notifications</identifier>"
+                        "<version>2008-07-14</version>"
+                        "<format>yang</format>"
+                        "<namespace>urn:ietf:params:xml:ns:netmod:notification</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>nc-notifications</identifier>"
+                        "<version>2008-07-14</version>"
+                        "<format>yin</format>"
+                        "<namespace>urn:ietf:params:xml:ns:netmod:notification</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-netconf-notifications</identifier>"
+                        "<version>2012-02-06</version>"
+                        "<format>yang</format>"
+                        "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-notifications</namespace>"
+                        "<location>NETCONF</location>"
+                    "</schema>"
+                    "<schema>"
+                        "<identifier>ietf-netconf-notifications</identifier>"
+                        "<version>2012-02-06</version>"
+                        "<format>yin</format>"
+                        "<namespace>urn:ietf:params:xml:ns:yang:ietf-netconf-notifications</namespace>"
                         "<location>NETCONF</location>"
                     "</schema>"
                 "</schemas>"
             "</netconf-state>"
         "</data>"
+    "</rpc-reply>";
+
+    test_write(p_out, get_rpc, __LINE__);
+    test_read(p_in, get_rpl, __LINE__);
+}
+
+static void
+test_get_filter6(void **state)
+{
+    (void)state; /* unused */
+    const char *get_rpc =
+    "<rpc msgid=\"1\" xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">"
+        "<get>"
+            "<filter type=\"subtree\">"
+                "<netconf-state xmlns=\"urn:ietf:params:xml:ns:yang:ietf-netconf-monitoring\">"
+                    "<schemas>"
+                        "<schema>"
+                            "<identifier>ietf-yang-metadata</identifier>"
+                            "<version>2016-08-08</version>"
+                        "</schema>"
+                    "</schemas>"
+                "</netconf-state>"
+            "</filter>"
+        "</get>"
+    "</rpc>";
+    const char *get_rpl =
+    "<rpc-reply msgid=\"1\" xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\">"
+        "<data xmlns=\"urn:ietf:params:xml:ns:netconf:base:1.0\"/>"
     "</rpc-reply>";
 
     test_write(p_out, get_rpc, __LINE__);
@@ -1021,7 +1406,8 @@ main(void)
                     cmocka_unit_test(test_get_filter2),
                     cmocka_unit_test(test_get_filter3),
                     cmocka_unit_test(test_get_filter4),
-                    cmocka_unit_test_teardown(test_get_filter5, np_stop),
+                    cmocka_unit_test(test_get_filter5),
+                    cmocka_unit_test_teardown(test_get_filter6, np_stop),
     };
 
     if (setenv("CMOCKA_TEST_ABORT", "1", 1)) {

@@ -152,13 +152,17 @@ ncm_session_add(struct nc_session *session)
 }
 
 void
-ncm_session_del(struct nc_session *session, int dropped)
+ncm_session_del(struct nc_session *session)
 {
     uint32_t i;
 
     pthread_mutex_lock(&stats.lock);
 
-    if (dropped) {
+    if (!nc_session_get_term_reason(session)) {
+        EINT;
+    }
+
+    if (nc_session_get_term_reason(session) != NC_SESSION_TERM_CLOSED) {
         ++stats.dropped_sessions;
     }
 
@@ -191,7 +195,7 @@ ncm_get_data(void)
     char buf[26];
     uint32_t i;
 
-    root = lyd_new_path(NULL, np2srv.ly_ctx, "/ietf-netconf-monitoring:netconf-state", NULL, 0);
+    root = lyd_new_path(NULL, np2srv.ly_ctx, "/ietf-netconf-monitoring:netconf-state", NULL, 0, 0);
     if (!root) {
         goto error;
     }
@@ -290,8 +294,9 @@ ncm_get_data(void)
                 break;
 #endif
             default: /* NC_TI_FD, NC_TI_NONE */
-                lyd_new_leaf(list, NULL, "transport", "transport");
-                break;
+                ERR("ietf-netconf-monitoring unsupported session transport type.");
+                pthread_mutex_unlock(&stats.lock);
+                goto error;
             }
             lyd_new_leaf(list, NULL, "username", nc_session_get_username(stats.sessions[i]));
             lyd_new_leaf(list, NULL, "source-host", nc_session_get_host(stats.sessions[i]));
@@ -331,7 +336,7 @@ ncm_get_data(void)
 
     pthread_mutex_unlock(&stats.lock);
 
-    if (lyd_validate(&root, LYD_OPT_GET)) {
+    if (lyd_validate(&root, LYD_OPT_NOSIBLINGS, NULL)) {
         goto error;
     }
 

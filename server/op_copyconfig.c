@@ -35,19 +35,24 @@ op_copyconfig(struct lyd_node *rpc, struct nc_session *ncs)
     sr_datastore_t target = 0, source = 0;
     struct ly_set *nodeset;
     struct lyd_node *config = NULL, *iter, *next;
-    struct lyd_node_anyxml *axml;
+    struct lyd_node_anydata *any;
     const char *dsname;
     char *str, path[1024];
     sr_val_t value;
-    struct nc_server_error *e = NULL;
+    struct nc_server_error *e;
+    struct nc_server_reply *ereply = NULL;
     int rc = SR_ERR_OK, path_index = 0, missing_keys = 0, lastkey = 0;
     unsigned int i;
 
     /* get sysrepo connections for this session */
     sessions = (struct np2_sessions *)nc_session_get_data(ncs);
 
+    if (np2srv_sr_check_exec_permission(sessions->srs, "/ietf-netconf:copy-config", &ereply)) {
+        goto finish;
+    }
+
     /* get know which datastore is being affected */
-    nodeset = lyd_get_node(rpc, "/ietf-netconf:copy-config/target/*");
+    nodeset = lyd_find_path(rpc, "/ietf-netconf:copy-config/target/*");
     dsname = nodeset->set.d[0]->schema->name;
     ly_set_free(nodeset);
 
@@ -62,18 +67,18 @@ op_copyconfig(struct lyd_node *rpc, struct nc_session *ncs)
 
     if (sessions->ds != target) {
         /* update sysrepo session */
-        sr_session_switch_ds(sessions->srs, target);
+        np2srv_sr_session_switch_ds(sessions->srs, target, NULL);
         sessions->ds = target;
     }
     if (sessions->ds != SR_DS_CANDIDATE) {
         /* update data from sysrepo */
-        if (sr_session_refresh(sessions->srs) != SR_ERR_OK) {
-            goto error;
+        if (np2srv_sr_session_refresh(sessions->srs, &ereply)) {
+            goto finish;
         }
     }
 
     /* get source */
-    nodeset = lyd_get_node(rpc, "/ietf-netconf:copy-config/source/*");
+    nodeset = lyd_find_path(rpc, "/ietf-netconf:copy-config/source/*");
     dsname = nodeset->set.d[0]->schema->name;
 
     if (!strcmp(dsname, "running")) {
@@ -83,12 +88,37 @@ op_copyconfig(struct lyd_node *rpc, struct nc_session *ncs)
     } else if (!strcmp(dsname, "candidate")) {
         source = SR_DS_CANDIDATE;
     } else if (!strcmp(dsname, "config")) {
-        axml = (struct lyd_node_anyxml *)nodeset->set.d[0];
-        config = lyd_parse_xml(rpc->schema->module->ctx, &axml->value.xml, LYD_OPT_CONFIG | LYD_OPT_DESTRUCT);
+        any = (struct lyd_node_anydata *)nodeset->set.d[0];
+        switch (any->value_type) {
+        case LYD_ANYDATA_CONSTSTRING:
+        case LYD_ANYDATA_STRING:
+        case LYD_ANYDATA_SXML:
+            config = lyd_parse_mem(np2srv.ly_ctx, any->value.str, LYD_XML, LYD_OPT_CONFIG | LYD_OPT_DESTRUCT | LYD_OPT_STRICT);
+            break;
+        case LYD_ANYDATA_DATATREE:
+            config = any->value.tree;
+            any->value.tree = NULL; /* "unlink" data tree from anydata to have full control */
+            break;
+        case LYD_ANYDATA_XML:
+            config = lyd_parse_xml(np2srv.ly_ctx, &any->value.xml, LYD_OPT_CONFIG | LYD_OPT_DESTRUCT | LYD_OPT_STRICT);
+            break;
+        case LYD_ANYDATA_JSON:
+        case LYD_ANYDATA_JSOND:
+        case LYD_ANYDATA_SXMLD:
+            EINT;
+            ly_set_free(nodeset);
+            e = nc_err(NC_ERR_OP_FAILED, NC_ERR_TYPE_APP);
+            nc_err_set_msg(e, np2log_lasterr(), "en");
+            ereply = nc_server_reply_err(e);
+            goto finish;
+        }
         if (!config) {
             if (ly_errno != LY_SUCCESS) {
                 ly_set_free(nodeset);
-                goto error;
+                e = nc_err(NC_ERR_OP_FAILED, NC_ERR_TYPE_APP);
+                nc_err_set_msg(e, np2log_lasterr(), "en");
+                ereply = nc_server_reply_err(e);
+                goto finish;
             } else {
                 /* TODO delete-config ??? */
             }
@@ -102,11 +132,14 @@ op_copyconfig(struct lyd_node *rpc, struct nc_session *ncs)
         /* remove all the data from the models mentioned in the <config> ... */
         nodeset = ly_set_new();
         LY_TREE_FOR(config, iter) {
-            ly_set_add(nodeset, iter->schema->module, 0);
+            if (iter->dflt) {
+                continue;
+            }
+            ly_set_add(nodeset, lyd_node_module(iter), 0);
         }
         for (i = 0; i < nodeset->number; i++) {
             snprintf(path, 1024, "/%s:*", ((struct lys_module *)nodeset->set.g[i])->name);
-            sr_delete_item(sessions->srs, path, 0);
+            np2srv_sr_delete_item(sessions->srs, path, 0, NULL);
         }
         ly_set_free(nodeset);
 
@@ -128,6 +161,12 @@ op_copyconfig(struct lyd_node *rpc, struct nc_session *ncs)
 
             /* specific handling for different types of nodes */
             lastkey = 0;
+
+            /* skip default nodes */
+            if (iter->dflt) {
+                goto dfs_continue;
+            }
+
             switch(iter->schema->nodetype) {
             case LYS_CONTAINER:
                 if (!((struct lys_node_container *)iter->schema)->presence) {
@@ -177,25 +216,20 @@ op_copyconfig(struct lyd_node *rpc, struct nc_session *ncs)
                 break;
             default:
                 ERR("%s: Invalid node to process", __func__);
-                goto error;
+                e = nc_err(NC_ERR_OP_FAILED, NC_ERR_TYPE_APP);
+                nc_err_set_msg(e, np2log_lasterr(), "en");
+                ereply = nc_server_reply_err(e);
+                goto finish;
             }
 
             /* create the iter in sysrepo */
-            rc = sr_set_item(sessions->srs, path, &value, 0);
+            rc = np2srv_sr_set_item(sessions->srs, path, &value, 0, &ereply);
             if (str) {
                 free(str);
                 str = NULL;
             }
-            switch (rc) {
-            case SR_ERR_OK:
-                break;
-            case SR_ERR_UNAUTHORIZED:
-                e = nc_err(NC_ERR_ACCESS_DENIED, NC_ERR_TYPE_PROT);
-                nc_err_set_path(e, path);
-                goto error;
-            default:
-                /* not covered error */
-                goto error;
+            if (rc) {
+                goto finish;
             }
 
 dfs_continue:
@@ -246,38 +280,30 @@ dfs_continue:
                 }
             }
         }
-        /* cleanup */
-        lyd_free_withsiblings(config);
 
         /* commit the result */
-        if (sessions->ds != SR_DS_CANDIDATE) {
-            /* commit in candidate causes copy to running,
-             * so do it here only on non-candidate datastores */
-            rc = sr_commit(sessions->srs);
-        }
+        rc = np2srv_sr_commit(sessions->srs, &ereply);
     } else {
-        rc = sr_copy_config(sessions->srs, NULL, source, target);
+        rc = np2srv_sr_copy_config(sessions->srs, NULL, source, target, &ereply);
         /* commit is done implicitely by sr_copy_config() */
     }
-
-    if (rc != SR_ERR_OK) {
-error:
-        /* handle error */
-        if (!e) {
-            e = nc_err(NC_ERR_OP_FAILED, NC_ERR_TYPE_APP);
-            nc_err_set_msg(e, np2log_lasterr(), "en");
-        }
-
-        /* cleanup */
-        lyd_free_withsiblings(config);
-
-        return nc_server_reply_err(e);
+    if (rc) {
+        goto finish;
     }
 
     if (sessions->ds == SR_DS_CANDIDATE) {
+        if (np2srv_sr_validate(sessions->srs, &ereply)) {
+            /* content is not valid or error, rollback */
+            np2srv_sr_discard_changes(sessions->srs, NULL);
+            goto finish;
+        }
         /* mark candidate as modified */
         sessions->flags |= NP2S_CAND_CHANGED;
     }
 
-    return nc_server_reply_ok();
+    ereply = nc_server_reply_ok();
+
+finish:
+    lyd_free_withsiblings(config);
+    return ereply;
 }
